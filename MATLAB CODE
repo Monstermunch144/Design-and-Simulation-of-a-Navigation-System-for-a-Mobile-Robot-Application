@@ -1,0 +1,159 @@
+%Create Scenario
+%Create a UAV scenario and set its local origin.
+Scenario = uavScenario("UpdateRate",100,"ReferenceLocation",[0 0 0]);
+
+%Add a marker to indicate the start pose of the UAV.
+addMesh(Scenario,"cylinder",{[0 0 1] [0 .01]},[0 1 0]);
+
+%Define UAV Platform
+%Specify the initial position and orientation of the UAV in the north-east-down (NED) frame.
+InitialPosition = [1 1 -7];
+InitialOrientation = [0 0 0];
+%Create a UAV platform in the scenario.
+platUAV = uavPlatform("UAV",Scenario, ...
+                      "ReferenceFrame","NED", ...
+                      "InitialPosition",InitialPosition, ...
+                      "InitialOrientation",eul2quat(InitialOrientation));
+
+%Add a quadrotor mesh for visualization.
+updateMesh(platUAV,"quadrotor",{1.2},[0 0 1],eul2tform([0 0 pi]));
+
+%Create and Mount Sensor Model
+%Specify the lidar resolution.
+AzimuthResolution = 0.5;      
+ElevationResolution = 2;
+
+%Specify the lidar range.
+MaxRange = 7;
+AzimuthLimits = [-179 179];
+ElevationLimits = [-15 15];
+
+%Create a statistical sensor model to generate point clouds for the lidar sensor.
+LidarModel = uavLidarPointCloudGenerator("UpdateRate",10, ...
+                                         "MaxRange",MaxRange, ...
+                                         "RangeAccuracy",3, ...
+                                         "AzimuthResolution",AzimuthResolution, ...
+                                         "ElevationResolution",ElevationResolution, ...
+                                         "AzimuthLimits",AzimuthLimits, ...
+                                         "ElevationLimits",ElevationLimits, ...                                       
+                                         "HasOrganizedOutput",true);
+
+%Create a lidar sensor and mount the sensor on the quadrotor.
+uavSensor("Lidar",platUAV,LidarModel, ...
+          "MountingLocation",[0 0 -0.4], ...
+          "MountingAngles",[0 0 180]);
+
+%Preview the scenario using the show3D function.
+show3D(Scenario);
+%Add Obstacles to Scenario
+%Add cuboid obstacles, representing buildings, to the scenario.
+ObstaclePositions = [6 0; 20 10; 10 22 ; 13.5 5 ; 6 17.5 ; 17 15 ; 6 6.5]; % Locations of the obstacles
+ObstacleHeight = 15;                      % Height of the obstacles
+ObstaclesWidth = 3;                       % Width of the obstacles
+
+for i = 1:size(ObstaclePositions,1)
+    % Set default size
+    width = 3;
+    height = 15;
+
+    % Make the second obstacle (i==2) bigger
+    if i == 2
+        width = 5;     % Wider
+        height = 20;   % Taller
+    end
+    if i == 3
+        width = 6;     % Wider
+        height = 20;   % Taller
+    end
+    if i == 6
+        width = 5;     % Wider
+        height = 5;   % Taller
+    end
+
+    addMesh(Scenario,"polygon", ...
+        {[ObstaclePositions(i,1)-width/2 ObstaclePositions(i,2)-width/2; ...
+          ObstaclePositions(i,1)+width/2 ObstaclePositions(i,2)-width/2; ...
+          ObstaclePositions(i,1)+width/2 ObstaclePositions(i,2)+width/2; ...
+          ObstaclePositions(i,1)-width/2 ObstaclePositions(i,2)+width/2], ...
+         [0 height]}, 0.651*ones(1,3));
+end
+show3D(Scenario);
+legend("Start Position","Obstacles")
+
+%Model Overview
+%The model consists of these main components:
+%UAV scenario — Configures the scenario and visualizes the trajectory.
+%Waypoint following and obstacle avoidance — Implements waypoint following with obstacle avoidance.
+%Controller and plant — Position controller for the UAV.
+%Control Panel — Use this panel to enable or disable obstacle avoidance, as well as alter the lookahead distance for obstacle avoidance.
+%Specify the waypoints for the UAV.
+%Define the waypoints for the UAV's flight path.
+%Define the waypoints where the UAV needs to go during its flight.
+%Each waypoint represents a specific location in the scenario for the UAV to navigate to.
+Waypoints = [InitialPosition; 0 14 -7; 20 20 -7; 17 0 -7 ; 10 11 -7 ; 15 10 -7];
+
+%Loop through the waypoints and add a marker at each location to show the UAVs path.
+%Starting from the second waypoint skip the initial position.
+for i = 2:size(Waypoints,1)
+    %Add a red cylindrical marker at each waypoint's position to visually represent the UAVs route.
+    %The height is set to 0.1 to keep the marker small and we place it at the waypoint's coordinates.
+    addMesh(Scenario, "cylinder", {[Waypoints(i,2) Waypoints(i,1) 1] [0 0.1]}, [1 0 0]);
+end
+show3D(Scenario);
+hold on
+
+% Plot the waypoints with a different color (red)
+h1 = plot3(Waypoints(:, 2), Waypoints(:, 1), -Waypoints(:, 3), 'ro', 'MarkerFaceColor', 'r'); 
+
+% Plot the path connecting waypoints with a green line
+h2 = plot3(Waypoints(:, 2), Waypoints(:, 1), -Waypoints(:, 3), '-g'); 
+
+% Plot the start position (for the legend) as a blue circle
+h3 = plot3(InitialPosition(2), InitialPosition(1), -InitialPosition(3), 'bo', 'MarkerFaceColor', 'b'); 
+
+% Create a dummy plot for Obstacles (just for the legend)
+h4 = plot(nan, nan, 's', 'MarkerFaceColor', [0.651 0.651 0.651], 'MarkerEdgeColor', [0.651 0.651 0.651]);
+
+% Customize the Legend
+legend([h1, h2, h3, h4], {"Waypoints", "Path", "Start Position", "Obstacles"}, 'TextColor', 'blue', 'LineWidth', 2, 'FontSize', 12);
+
+% Optional: Set the legend background color
+legendHandle = legend([h1, h2, h3, h4], {"Waypoints", "Path", "Start Position", "Obstacles"});
+
+% Proportional gains for PID controller which adjusts the UAVs response based on error.
+Px = 15;  % Proportional gain in the X-direction.
+Py = 15;  % Proportional gain in the Y-direction.
+Pz = 15.5; % Proportional gain in the Z-direction.
+
+% Derivative gains which dampens the UAVs response based on rate of change.
+Dx = 3.5; % Derivative gain in the X-direction.
+Dy = 3.5; % Derivative gain in the Y-direction.
+Dz = 4.5; % Derivative gain in the Z-direction.
+
+% Integral gains which adjusts the UAVs response based on cumulative error.
+Ix = 0.1;  
+Iy = 0.1;  
+Iz = 0.1;  
+
+% Filter Coefficients to smooth the sensor measurements and control inputs.
+Nx = 10;  
+Ny = 10;  
+Nz = 14.4947065605712;  
+
+%UAV control settings.
+%Sample time for control loop updates.
+UAVSampleTime = 0.001; 
+Gravity = 9.81; 
+%Mass of the UAV in kilograms.
+DroneMass = 0.1;  
+
+%Simulates the model.
+out = sim("ObstacleAvoidanceDemo.slx"); 
+
+hold on
+%Gets the 3D trajectory points from the output
+points = squeeze(out.trajectoryPoints(1,:,:))';
+%Plots the UAVs trajectory using a red line in 3D space
+plot3(points(:,2),points(:,1),-points(:,3),"-r");
+%Adds a legend to label different elements on the plot.
+legend(["Start Position","Obstacles","","","Waypoints","","","Direct Path","UAV Trajectory"])
